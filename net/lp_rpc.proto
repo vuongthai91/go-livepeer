@@ -148,6 +148,9 @@ message RegisterRequest {
 
     // Shared secret for auth
     string secret = 1;
+
+    // Transcoder capacity 
+    int64 maxSessions = 2;
 }
 
 // Sent by the transcoder
