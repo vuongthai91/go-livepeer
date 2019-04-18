@@ -224,7 +224,7 @@ func main() {
 		case core.TranscoderNode:
 			nodeType = "trcr"
 		}
-		lpmon.Init(*monUrl, nodeType, nodeID, core.LivepeerVersion)
+		lpmon.Init(*monUrl, nodeType, nodeID, core.LivepeerVersion, false)
 	}
 
 	if n.NodeType == core.TranscoderNode {

@@ -37,12 +37,12 @@ type event struct {
 
 var eventsURL string
 
-func Init(url, nodeType, nodeID, version string) {
+func Init(url, nodeType, nodeID, version string, testing bool) {
 	eventsURL = url
 	metrics.nodeID = nodeID
 	metrics.nodeType = nodeType
 	go sendLoop(metrics.ch)
-	initCensus(nodeType, nodeID, version)
+	initCensus(nodeType, nodeID, version, testing)
 }
 
 func sendLoop(inCh chan *event) {
