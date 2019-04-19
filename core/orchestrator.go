@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"sync"
 	"time"
 
 	ethcommon "github.com/ethereum/go-ethereum/common"
@@ -425,18 +426,16 @@ func (n *LivepeerNode) transcodeSegmentLoop(md *SegTranscodingMetadata, segChan 
 }
 
 func (n *LivepeerNode) serveTranscoder(stream net.Transcoder_RegisterTranscoderServer, maxSessions int) {
-	transcoder := NewRemoteTranscoder(n, stream, maxSessions)
 
 	n.tcoderMutex.Lock()
-	n.Transcoder = transcoder
+	transcoder := NewRemoteTranscoder(n, stream, maxSessions)
+	n.TranscoderManager.Register(transcoder)
+	defer n.TranscoderManager.Unregister(transcoder)
 	n.tcoderMutex.Unlock()
 
 	select {
 	case <-transcoder.eof:
 		glog.V(common.DEBUG).Info("Closing transcoder channel") // XXX cxn info
-		n.tcoderMutex.Lock()
-		n.Transcoder = nil
-		n.tcoderMutex.Unlock()
 		return
 	}
 }
@@ -497,6 +496,70 @@ func NewRemoteTranscoder(n *LivepeerNode, stream net.Transcoder_RegisterTranscod
 		eof:      make(chan struct{}, 1),
 		capacity: maxSessions,
 	}
+}
+
+func NewRemoteTranscoderManager() RemoteTranscoderManager {
+	return RemoteTranscoderManager{
+		remoteTranscoders: []*RemoteTranscoder{},
+		liveTranscoders:   map[net.Transcoder_RegisterTranscoderServer]*RemoteTranscoder{},
+		RTmutex:           &sync.Mutex{},
+	}
+}
+
+type RemoteTranscoderManager struct {
+	remoteTranscoders []*RemoteTranscoder
+	liveTranscoders   map[net.Transcoder_RegisterTranscoderServer]*RemoteTranscoder
+	RTmutex           *sync.Mutex
+}
+
+func (rtm *RemoteTranscoderManager) Register(transcoder *RemoteTranscoder) {
+	rtm.RTmutex.Lock()
+	defer rtm.RTmutex.Unlock()
+	rtm.liveTranscoders[transcoder.stream] = transcoder
+
+	for i := 0; i < transcoder.Capacity(); i++ {
+		rtm.AppendTranscoder(transcoder)
+	}
+}
+
+func (rtm *RemoteTranscoderManager) AppendTranscoder(transcoder *RemoteTranscoder) {
+	// rtm.RTmutex.Lock()
+	// defer rtm.RTmutex.Unlock()
+	if _, ok := rtm.liveTranscoders[transcoder.stream]; ok {
+		rtm.remoteTranscoders = append(rtm.remoteTranscoders, transcoder)
+	}
+	return
+}
+
+func (rtm *RemoteTranscoderManager) Unregister(t *RemoteTranscoder) {
+	rtm.RTmutex.Lock()
+	defer rtm.RTmutex.Unlock()
+	for _, liveT := range rtm.liveTranscoders {
+		if liveT.stream == t.stream {
+			delete(rtm.liveTranscoders, t.stream)
+		}
+	}
+
+	var remoteTranscoders []*RemoteTranscoder
+	for _, v := range rtm.remoteTranscoders {
+		if v.stream == t.stream {
+			continue
+		}
+		remoteTranscoders = append(remoteTranscoders, v)
+	}
+	rtm.remoteTranscoders = remoteTranscoders
+}
+
+func (rtm *RemoteTranscoderManager) Transcode(fname string, profiles []ffmpeg.VideoProfile) ([][]byte, error) {
+	rtm.RTmutex.Lock()
+	defer rtm.RTmutex.Unlock()
+	currentTranscoder, remoteTranscoders := rtm.remoteTranscoders[0], rtm.remoteTranscoders[1:]
+	rtm.remoteTranscoders = remoteTranscoders
+
+	res, err := currentTranscoder.Transcode(fname, profiles)
+	rtm.AppendTranscoder(currentTranscoder)
+
+	return res, err
 }
 
 func cachePMSessionID(n *LivepeerNode, m ManifestID, s string) {

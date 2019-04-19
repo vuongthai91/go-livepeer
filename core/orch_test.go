@@ -67,24 +67,22 @@ func TestCurrentBlock(t *testing.T) {
 
 func TestServeTranscoder(t *testing.T) {
 	n, _ := NewLivepeerNode(nil, "", nil)
+	n.TranscoderManager = NewRemoteTranscoderManager()
 	strm := &StubTranscoderServer{}
 
 	// test that a transcoder was created
 	go n.serveTranscoder(strm, 5)
 	time.Sleep(1 * time.Second)
-	if n.Transcoder == nil {
+	if _, ok := n.TranscoderManager.liveTranscoders[strm]; !ok || len(n.TranscoderManager.remoteTranscoders) == 0 {
 		t.Error("Transcoder nil")
 	}
-	tc, ok := n.Transcoder.(*RemoteTranscoder)
-	if !ok {
-		t.Error("Unexpected transcoder type")
-	}
 
-	// test shutdown
-	tc.eof <- struct{}{}
+	transcoder := NewRemoteTranscoder(n, strm, 5)
+	n.TranscoderManager.Unregister(transcoder)
+
 	time.Sleep(1 * time.Second)
-	if n.Transcoder != nil {
-		t.Error("Transcoder not nil")
+	if _, ok := n.TranscoderManager.liveTranscoders[strm]; ok || len(n.TranscoderManager.remoteTranscoders) != 0 {
+		t.Error("Transcoder should be nil")
 	}
 }
 
@@ -129,6 +127,58 @@ func TestRemoteTranscoder(t *testing.T) {
 		t.Error("Unexpected error ", err)
 	}
 	RemoteTranscoderTimeout = 8 * time.Second
+}
+
+func TestRegisterTranscoder(t *testing.T) {
+	n, _ := NewLivepeerNode(nil, "", nil)
+	n.TranscoderManager = NewRemoteTranscoderManager()
+	strm := &StubTranscoderServer{}
+
+	// test that transcoder is added to liveTranscoders and remoteTranscoders
+	transcoder := NewRemoteTranscoder(n, strm, 5)
+	n.TranscoderManager.Register(transcoder)
+
+	assert := assert.New(t)
+	assert.NotNil(n.TranscoderManager.liveTranscoders[strm])
+	assert.Len(n.TranscoderManager.remoteTranscoders, 5)
+
+	// test that transcoder is removed from liveTranscoders and remoteTranscoders
+	n.TranscoderManager.Unregister(transcoder)
+	assert.Nil(n.TranscoderManager.liveTranscoders[strm])
+	assert.Empty(n.TranscoderManager.remoteTranscoders)
+}
+
+func TestAppendTranscoder(t *testing.T) {
+	n, _ := NewLivepeerNode(nil, "", nil)
+	n.TranscoderManager = NewRemoteTranscoderManager()
+	strm := &StubTranscoderServer{node: n}
+
+	transcoder := NewRemoteTranscoder(n, strm, 5)
+
+	// sanity check that transcoder is not in liveTranscoders
+	assert := assert.New(t)
+	assert.Nil(n.TranscoderManager.liveTranscoders[strm])
+
+	// assert that transcoder is not added to remoteTranscoders if it does not exist in liveTranscoders
+	n.TranscoderManager.AppendTranscoder(transcoder)
+	assert.Nil(n.TranscoderManager.liveTranscoders[strm])
+	assert.Len(n.TranscoderManager.remoteTranscoders, 0)
+
+	// register transcoder, which adds transcoder to liveTranscoders and remoteTranscoders
+	n.TranscoderManager.Register(transcoder)
+	assert.NotNil(n.TranscoderManager.liveTranscoders[strm])
+	assert.Len(n.TranscoderManager.remoteTranscoders, 5)
+
+	// assert no error using Transcode in TranscodeManager
+	_, err := n.TranscoderManager.Transcode("", nil)
+	assert.Nil(err)
+	assert.NotNil(n.TranscoderManager.liveTranscoders[strm])
+	assert.Len(n.TranscoderManager.remoteTranscoders, 5)
+
+	// assert that transcoder is added to remoteTranscoders if it exists in liveTranscoders
+	n.TranscoderManager.AppendTranscoder(transcoder)
+	assert.NotNil(n.TranscoderManager.liveTranscoders[strm])
+	assert.Len(n.TranscoderManager.remoteTranscoders, 6)
 }
 
 func TestTaskChan(t *testing.T) {
